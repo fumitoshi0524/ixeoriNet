@@ -57,3 +57,7 @@ See [`docs/API.md`](docs/API.md) for a summarized API reference covering the mai
 1. Run `go fmt ./...` and `go test ./...` before submitting changes.
 2. Keep new components focused and add tests where meaningful.
 3. Open an issue if you plan larger architectural changes.
+
+## Aditional Notes
+
+This projects comes from a final course assignment of a DL class in UESTC，so it may not work very well in some situations，and it's efficiency definitely needs improvement. So this project is mainly for sharing, and contributions are welcomed. It would be my pleasure if this project could give you any help.   
