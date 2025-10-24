@@ -57,7 +57,3 @@ See [`docs/API.md`](docs/API.md) for a summarized API reference covering the mai
 1. Run `go fmt ./...` and `go test ./...` before submitting changes.
 2. Keep new components focused and add tests where meaningful.
 3. Open an issue if you plan larger architectural changes.
-
-## License
-
-MIT
