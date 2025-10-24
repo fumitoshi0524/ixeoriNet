@@ -61,3 +61,7 @@ See [`docs/API.md`](docs/API.md) for a summarized API reference covering the mai
 ## Aditional Notes
 
 This project originated from a final assignment in a Deep Learning course at UESTC. It may not perform optimally in all scenarios, and its efficiency is still open to improvement. The primary purpose of this repository is to share ideas and code—contributions and suggestions are warmly welcomed. If it proves helpful to you in any way, that would be my greatest pleasure.
+
+## License
+
+[DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE](LICENSE)
