@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"path/filepath"
 	"time"
 
 	mnistdata "github.com/fumitoshi0524/ixeoriNet/examples/mnist"
@@ -21,9 +20,8 @@ type optimizer interface {
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	dataDir := filepath.Join("data", "mnist")
 
-	trainDS, testDS, err := mnistdata.Load(dataDir)
+	trainDS, testDS, err := mnistdata.LoadDefault()
 	if err != nil {
 		log.Fatalf("load mnist: %v", err)
 	}

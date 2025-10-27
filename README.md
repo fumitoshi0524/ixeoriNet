@@ -8,7 +8,7 @@
 - Neural network modules: linear layers, convolutions (1D/2D/3D), recurrent units (RNN/GRU/LSTM), embeddings, normalization layers, dropout, and pooling.
 - Optimizers: SGD (with momentum/Nesterov), Adam, AdamW, RMSProp, Adagrad, Adadelta, plus gradient clipping and parameter constraints.
 - Losses: cross-entropy, negative log likelihood, mean squared error.
-- Command-line examples, including an MNIST classifier that achieves >97% accuracy.
+- Ready-to-run examples under `examples/`, including MNIST classifiers that achieve >97% accuracy.
 
 ## Installation
 
@@ -22,24 +22,31 @@ The project targets Go 1.21 or newer.
 ## Repository layout
 
 ```
-cmd/            Example applications (classifier, demo, mnist)
-docs/           Additional documentation (API reference)
-internal/       Parallel helpers and utilities
-loss/           Loss function implementations
-nn/             Neural-network modules
-optim/          Optimizers and gradient utilities
-tensor/         Tensor data structures and autograd machinery
+docs/                   Additional documentation (API reference)
+examples/               Example applications (classifier, regression, MNIST)
+internal/               Parallel helpers and utilities
+loss/                   Loss function implementations
+nn/                     Neural-network modules
+optim/                  Optimizers and gradient utilities
+tensor/                 Tensor data structures and autograd machinery
 ```
 
 ## Running the MNIST examples
 
 ```bash
 # From the repository root
-go run ./cmd/mnist      # MLP classifier
-go run ./cmd/mnist_cnn  # CNN classifier
+go run ./examples/mnist/mlp   # MLP classifier
+go run ./examples/mnist/cnn   # CNN classifier
 ```
 
-Both programs download the MNIST dataset (with multiple mirrors) on first run. The MLP trains for 12 epochs and verifies that the final test accuracy surpasses 97%. The CNN variant trains a small convolutional model with pooling and expects >98.5% test accuracy.
+Both programs download the MNIST dataset (with multiple mirrors) on first run and cache it under your OS temp directory. The MLP trains for 12 epochs and verifies that the final test accuracy surpasses 97%. The CNN variant trains a small convolutional model with pooling and expects >98.5% test accuracy.
+
+Other quickstarts:
+
+```bash
+go run ./examples/classifier         # 2D toy classification
+go run ./examples/linear_regression  # 1D linear regression
+```
 
 ## Testing
 

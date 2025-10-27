@@ -43,6 +43,16 @@ var mnistSources = map[string][]string{
 	},
 }
 
+// DefaultDir returns an OS-specific cache directory for storing MNIST assets.
+func DefaultDir() string {
+	return filepath.Join(os.TempDir(), "ixeoriNet", "mnist")
+}
+
+// LoadDefault downloads (if needed) and loads MNIST from the default cache path.
+func LoadDefault() (*Dataset, *Dataset, error) {
+	return Load(DefaultDir())
+}
+
 // Dataset stores normalized MNIST samples and labels.
 type Dataset struct {
 	images   []float64
