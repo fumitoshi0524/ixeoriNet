@@ -11,6 +11,7 @@ import (
 	"github.com/fumitoshi0524/ixeoriNet/loss"
 	"github.com/fumitoshi0524/ixeoriNet/nn"
 	"github.com/fumitoshi0524/ixeoriNet/optim"
+	"github.com/fumitoshi0524/ixeoriNet/tensor"
 )
 
 // optimizer captures the methods needed from any optimizer without importing extra types.
@@ -29,33 +30,47 @@ func main() {
 	}
 
 	classes := 10
-	features := trainDS.Features()
+	height := trainDS.Height()
+	width := trainDS.Width()
 
 	model := nn.NewSequential(
-		nn.NewLinear(features, 512, true),
+		nn.NewConv2d(1, 32, 3, 3, 1, 1, 1, 1, true),
 		nn.Relu(),
-		nn.NewLinear(512, 256, true),
+		nn.NewMaxPool2d(2, 2, 2, 2, 0, 0),
+		nn.NewConv2d(32, 64, 3, 3, 1, 1, 1, 1, true),
+		nn.Relu(),
+		nn.NewMaxPool2d(2, 2, 2, 2, 0, 0),
+		nn.NewFunctional(func(x *tensor.Tensor) (*tensor.Tensor, error) {
+			return tensor.Flatten(x)
+		}),
+		nn.NewLinear(64*7*7, 256, true),
 		nn.Relu(),
 		nn.NewLinear(256, classes, true),
 	)
 
-	opt := optim.NewAdam(model.Parameters(), 1e-3, 0.9, 0.999, 1e-8)
+	opt := optim.NewAdamWWithConfig(model.Parameters(), optim.AdamWConfig{
+		LR:          1e-3,
+		Beta1:       0.9,
+		Beta2:       0.999,
+		Eps:         1e-8,
+		WeightDecay: 1e-2,
+	})
 
-	if err := trainModel(model, opt, trainDS, testDS, classes); err != nil {
+	if err := trainModel(model, opt, trainDS, testDS, height, width, classes); err != nil {
 		log.Fatalf("train: %v", err)
 	}
 
-	_, testAcc, err := evaluate(model, testDS, 256, classes)
+	_, testAcc, err := evaluate(model, testDS, 256, height, width, classes)
 	if err != nil {
 		log.Fatalf("evaluate: %v", err)
 	}
-	if testAcc < 0.97 {
+	if testAcc < 0.985 {
 		log.Fatalf("test accuracy %.2f%% below target", testAcc*100)
 	}
 	fmt.Printf("final test accuracy: %.2f%%\n", testAcc*100)
 }
 
-func trainModel(model nn.Module, opt optimizer, trainDS, testDS *mnistdata.Dataset, classes int) error {
+func trainModel(model nn.Module, opt optimizer, trainDS, testDS *mnistdata.Dataset, height, width, classes int) error {
 	epochs := 12
 	batchSize := 128
 	samples := trainDS.Count()
@@ -72,9 +87,14 @@ func trainModel(model nn.Module, opt optimizer, trainDS, testDS *mnistdata.Datas
 			}
 			batchIdx := perm[start:end]
 			inputs, targets := trainDS.Batch(batchIdx)
+			batch := len(targets)
+			reshaped, err := inputs.Reshape(batch, 1, height, width)
+			if err != nil {
+				return err
+			}
 
 			opt.ZeroGrad()
-			preds, err := model.Forward(inputs)
+			preds, err := model.Forward(reshaped)
 			if err != nil {
 				return err
 			}
@@ -95,7 +115,7 @@ func trainModel(model nn.Module, opt optimizer, trainDS, testDS *mnistdata.Datas
 		trainLoss := runningLoss / float64(samples)
 		trainAcc := float64(correct) / float64(samples)
 
-		testLoss, testAcc, err := evaluate(model, testDS, 256, classes)
+		testLoss, testAcc, err := evaluate(model, testDS, 256, height, width, classes)
 		if err != nil {
 			return err
 		}
@@ -107,7 +127,7 @@ func trainModel(model nn.Module, opt optimizer, trainDS, testDS *mnistdata.Datas
 	return nil
 }
 
-func evaluate(model nn.Module, ds *mnistdata.Dataset, batchSize, classes int) (float64, float64, error) {
+func evaluate(model nn.Module, ds *mnistdata.Dataset, batchSize, height, width, classes int) (float64, float64, error) {
 	total := ds.Count()
 	totalLoss := 0.0
 	totalCorrect := 0
@@ -122,7 +142,12 @@ func evaluate(model nn.Module, ds *mnistdata.Dataset, batchSize, classes int) (f
 			idx[i-start] = i
 		}
 		inputs, targets := ds.Batch(idx)
-		preds, err := model.Forward(inputs)
+		batch := len(targets)
+		reshaped, err := inputs.Reshape(batch, 1, height, width)
+		if err != nil {
+			return 0, 0, err
+		}
+		preds, err := model.Forward(reshaped)
 		if err != nil {
 			return 0, 0, err
 		}

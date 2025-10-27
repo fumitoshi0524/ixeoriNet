@@ -1,6 +1,10 @@
 package tensor
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/fumitoshi0524/ixeoriNet/internal/parallel"
+)
 
 // Conv2D performs a 2D convolution over the input tensor with the provided weights and optional bias.
 // Input shape: [batch, in_channels, in_h, in_w]
@@ -40,24 +44,40 @@ func Conv2D(input, weight, bias *Tensor, strideH, strideW, padH, padW int) (*Ten
 	}
 
 	out := Zeros(batch, outChannels, outH, outW)
-	for n := 0; n < batch; n++ {
-		for oc := 0; oc < outChannels; oc++ {
+	totalChannels := batch * outChannels
+	kernelArea := kernelH * kernelW
+	inputHW := inH * inW
+	outHW := outH * outW
+	parallel.For(totalChannels, func(start, end int) {
+		for noc := start; noc < end; noc++ {
+			n := noc / outChannels
+			oc := noc % outChannels
+			batchOffset := n * inChannels * inputHW
+			outBase := (n*outChannels + oc) * outHW
+			weightOcOffset := oc * inChannels * kernelArea
 			for oh := 0; oh < outH; oh++ {
+				ihBase := oh*strideH - padH
+				outRow := outBase + oh*outW
 				for ow := 0; ow < outW; ow++ {
+					iwBase := ow*strideW - padW
 					acc := 0.0
 					for ic := 0; ic < inChannels; ic++ {
+						inputChannelOffset := batchOffset + ic*inputHW
+						weightChannelOffset := weightOcOffset + ic*kernelArea
 						for kh := 0; kh < kernelH; kh++ {
-							ih := oh*strideH - padH + kh
+							ih := ihBase + kh
 							if ih < 0 || ih >= inH {
 								continue
 							}
+							inputRow := inputChannelOffset + ih*inW
+							weightRow := weightChannelOffset + kh*kernelW
 							for kw := 0; kw < kernelW; kw++ {
-								iw := ow*strideW - padW + kw
+								iw := iwBase + kw
 								if iw < 0 || iw >= inW {
 									continue
 								}
-								inputIdx := ((n*inChannels+ic)*inH+ih)*inW + iw
-								weightIdx := ((oc*inChannels+ic)*kernelH+kh)*kernelW + kw
+								inputIdx := inputRow + iw
+								weightIdx := weightRow + kw
 								acc += input.data[inputIdx] * weight.data[weightIdx]
 							}
 						}
@@ -65,11 +85,11 @@ func Conv2D(input, weight, bias *Tensor, strideH, strideW, padH, padW int) (*Ten
 					if bias != nil {
 						acc += bias.data[oc]
 					}
-					out.data[((n*outChannels+oc)*outH+oh)*outW+ow] = acc
+					out.data[outRow+ow] = acc
 				}
 			}
 		}
-	}
+	})
 
 	requiresGrad := input.requiresGrad || weight.requiresGrad || (bias != nil && bias.requiresGrad)
 	if !requiresGrad {
@@ -93,77 +113,111 @@ func Conv2D(input, weight, bias *Tensor, strideH, strideW, padH, padW int) (*Ten
 		backward: func(grad *Tensor, grads map[*Tensor]*Tensor) {
 			if input.requiresGrad {
 				gInput := Zeros(input.shape...)
-				for n := 0; n < batch; n++ {
-					for oc := 0; oc < outChannels; oc++ {
-						for oh := 0; oh < outH; oh++ {
-							for ow := 0; ow < outW; ow++ {
-								gVal := grad.data[((n*outChannels+oc)*outH+oh)*outW+ow]
-								for ic := 0; ic < inChannels; ic++ {
-									for kh := 0; kh < kernelH; kh++ {
-										ih := oh*strideH - padH + kh
-										if ih < 0 || ih >= inH {
-											continue
-										}
-										for kw := 0; kw < kernelW; kw++ {
-											iw := ow*strideW - padW + kw
-											if iw < 0 || iw >= inW {
+				parallel.For(batch, func(start, end int) {
+					for n := start; n < end; n++ {
+						inBatchOffset := n * inChannels * inputHW
+						gradBatchOffset := n * outChannels * outHW
+						for oc := 0; oc < outChannels; oc++ {
+							weightOcOffset := oc * inChannels * kernelArea
+							gradChannelOffset := gradBatchOffset + oc*outHW
+							for oh := 0; oh < outH; oh++ {
+								ihBase := oh*strideH - padH
+								gradRow := gradChannelOffset + oh*outW
+								for ow := 0; ow < outW; ow++ {
+									iwBase := ow*strideW - padW
+									gVal := grad.data[gradRow+ow]
+									if gVal == 0 {
+										continue
+									}
+									for ic := 0; ic < inChannels; ic++ {
+										inputChannelOffset := inBatchOffset + ic*inputHW
+										weightChannelOffset := weightOcOffset + ic*kernelArea
+										for kh := 0; kh < kernelH; kh++ {
+											ih := ihBase + kh
+											if ih < 0 || ih >= inH {
 												continue
 											}
-											inputIdx := ((n*inChannels+ic)*inH+ih)*inW + iw
-											weightIdx := ((oc*inChannels+ic)*kernelH+kh)*kernelW + kw
-											gInput.data[inputIdx] += weight.data[weightIdx] * gVal
+											inputRow := inputChannelOffset + ih*inW
+											weightRow := weightChannelOffset + kh*kernelW
+											for kw := 0; kw < kernelW; kw++ {
+												iw := iwBase + kw
+												if iw < 0 || iw >= inW {
+													continue
+												}
+												inputIdx := inputRow + iw
+												weightIdx := weightRow + kw
+												gInput.data[inputIdx] += weight.data[weightIdx] * gVal
+											}
 										}
 									}
 								}
 							}
 						}
 					}
-				}
+				})
 				accumulate(grads, input, gInput)
 			}
 
 			if weight.requiresGrad {
 				gWeight := Zeros(weight.shape...)
-				for n := 0; n < batch; n++ {
-					for oc := 0; oc < outChannels; oc++ {
-						for oh := 0; oh < outH; oh++ {
-							for ow := 0; ow < outW; ow++ {
-								gVal := grad.data[((n*outChannels+oc)*outH+oh)*outW+ow]
-								for ic := 0; ic < inChannels; ic++ {
-									for kh := 0; kh < kernelH; kh++ {
-										ih := oh*strideH - padH + kh
-										if ih < 0 || ih >= inH {
-											continue
-										}
-										for kw := 0; kw < kernelW; kw++ {
-											iw := ow*strideW - padW + kw
-											if iw < 0 || iw >= inW {
+				parallel.For(outChannels, func(start, end int) {
+					for oc := start; oc < end; oc++ {
+						weightOcOffset := oc * inChannels * kernelArea
+						for n := 0; n < batch; n++ {
+							gradChannelOffset := ((n*outChannels + oc) * outH) * outW
+							inBatchOffset := n * inChannels * inputHW
+							for oh := 0; oh < outH; oh++ {
+								ihBase := oh*strideH - padH
+								gradRow := gradChannelOffset + oh*outW
+								for ow := 0; ow < outW; ow++ {
+									iwBase := ow*strideW - padW
+									gVal := grad.data[gradRow+ow]
+									if gVal == 0 {
+										continue
+									}
+									for ic := 0; ic < inChannels; ic++ {
+										inputChannelOffset := inBatchOffset + ic*inputHW
+										weightChannelOffset := weightOcOffset + ic*kernelArea
+										for kh := 0; kh < kernelH; kh++ {
+											ih := ihBase + kh
+											if ih < 0 || ih >= inH {
 												continue
 											}
-											inputIdx := ((n*inChannels+ic)*inH+ih)*inW + iw
-											weightIdx := ((oc*inChannels+ic)*kernelH+kh)*kernelW + kw
-											gWeight.data[weightIdx] += input.data[inputIdx] * gVal
+											inputRow := inputChannelOffset + ih*inW
+											weightRow := weightChannelOffset + kh*kernelW
+											for kw := 0; kw < kernelW; kw++ {
+												iw := iwBase + kw
+												if iw < 0 || iw >= inW {
+													continue
+												}
+												inputIdx := inputRow + iw
+												weightIdx := weightRow + kw
+												gWeight.data[weightIdx] += input.data[inputIdx] * gVal
+											}
 										}
 									}
 								}
 							}
 						}
 					}
-				}
+				})
 				accumulate(grads, weight, gWeight)
 			}
 
 			if bias != nil && bias.requiresGrad {
 				gBias := Zeros(bias.shape...)
-				for n := 0; n < batch; n++ {
-					for oc := 0; oc < outChannels; oc++ {
-						for oh := 0; oh < outH; oh++ {
-							for ow := 0; ow < outW; ow++ {
-								gBias.data[oc] += grad.data[((n*outChannels+oc)*outH+oh)*outW+ow]
+				parallel.For(outChannels, func(start, end int) {
+					for oc := start; oc < end; oc++ {
+						sum := 0.0
+						for n := 0; n < batch; n++ {
+							gradChannelOffset := ((n*outChannels + oc) * outH) * outW
+							for idx := 0; idx < outHW; idx++ {
+								sum += grad.data[gradChannelOffset+idx]
 							}
 						}
+						gBias.data[oc] = sum
 					}
-				}
+				})
 				accumulate(grads, bias, gBias)
 			}
 		},

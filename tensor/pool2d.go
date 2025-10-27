@@ -1,6 +1,12 @@
 package tensor
 
-import "errors"
+import (
+	"errors"
+	"math"
+	"sync/atomic"
+
+	"github.com/fumitoshi0524/ixeoriNet/internal/parallel"
+)
 
 // MaxPool2D applies 2D max pooling on the input tensor.
 // Input shape: [batch, channels, in_h, in_w]
@@ -28,38 +34,45 @@ func MaxPool2D(input *Tensor, kernelH, kernelW, strideH, strideW, padH, padW int
 	indices := make([]int, total)
 	out := Zeros(batch, channels, outH, outW)
 
-	for n := 0; n < batch; n++ {
-		for c := 0; c < channels; c++ {
+	channelTotal := batch * channels
+	parallel.For(channelTotal, func(start, end int) {
+		for nc := start; nc < end; nc++ {
+			n := nc / channels
+			c := nc % channels
+			outBase := (n*channels + c) * outH * outW
+			inBase := (n*channels + c) * inH * inW
 			for oh := 0; oh < outH; oh++ {
+				ihBase := oh*strideH - padH
+				outRow := outBase + oh*outW
 				for ow := 0; ow < outW; ow++ {
-					bestVal := -1.0
+					iwBase := ow*strideW - padW
+					bestVal := math.Inf(-1)
 					bestIdx := -1
-					first := true
 					for kh := 0; kh < kernelH; kh++ {
-						ih := oh*strideH - padH + kh
+						ih := ihBase + kh
 						if ih < 0 || ih >= inH {
 							continue
 						}
+						inputRow := inBase + ih*inW
 						for kw := 0; kw < kernelW; kw++ {
-							iw := ow*strideW - padW + kw
+							iw := iwBase + kw
 							if iw < 0 || iw >= inW {
 								continue
 							}
-							idx := ((n*channels+c)*inH+ih)*inW + iw
+							idx := inputRow + iw
 							val := input.data[idx]
-							if first || val > bestVal {
+							if val > bestVal {
 								bestVal = val
 								bestIdx = idx
-								first = false
 							}
 						}
 					}
-					out.data[((n*channels+c)*outH+oh)*outW+ow] = bestVal
-					indices[((n*channels+c)*outH+oh)*outW+ow] = bestIdx
+					out.data[outRow+ow] = bestVal
+					indices[outRow+ow] = bestIdx
 				}
 			}
 		}
-	}
+	})
 
 	requiresGrad := input.requiresGrad
 	if !requiresGrad {
@@ -71,12 +84,22 @@ func MaxPool2D(input *Tensor, kernelH, kernelW, strideH, strideW, padH, padW int
 	out.node = &node{
 		backward: func(grad *Tensor, grads map[*Tensor]*Tensor) {
 			gInput := Zeros(input.shape...)
-			for idx, src := range indices {
-				if src < 0 {
-					continue
+			parallel.For(batch, func(start, end int) {
+				for n := start; n < end; n++ {
+					gradBase := n * channels * outH * outW
+					for c := 0; c < channels; c++ {
+						offsetOut := gradBase + c*outH*outW
+						offsetIdx := (n*channels + c) * outH * outW
+						for i := 0; i < outH*outW; i++ {
+							src := indices[offsetIdx+i]
+							if src < 0 {
+								continue
+							}
+							gInput.data[src] += grad.data[offsetOut+i]
+						}
+					}
 				}
-				gInput.data[src] += grad.data[idx]
-			}
+			})
 			accumulate(grads, input, gInput)
 		},
 	}
@@ -108,34 +131,52 @@ func AvgPool2D(input *Tensor, kernelH, kernelW, strideH, strideW, padH, padW int
 
 	out := Zeros(batch, channels, outH, outW)
 
-	for n := 0; n < batch; n++ {
-		for c := 0; c < channels; c++ {
+	channelTotal := batch * channels
+	var errFlag int32
+	errValue := errors.New("AvgPool2D kernel has no overlap with input")
+	parallel.For(channelTotal, func(start, end int) {
+		for nc := start; nc < end; nc++ {
+			if atomic.LoadInt32(&errFlag) == 1 {
+				return
+			}
+			n := nc / channels
+			c := nc % channels
+			outBase := (n*channels + c) * outH * outW
+			inBase := (n*channels + c) * inH * inW
 			for oh := 0; oh < outH; oh++ {
+				ihBase := oh*strideH - padH
+				outRow := outBase + oh*outW
 				for ow := 0; ow < outW; ow++ {
+					iwBase := ow*strideW - padW
 					sum := 0.0
 					count := 0
 					for kh := 0; kh < kernelH; kh++ {
-						ih := oh*strideH - padH + kh
+						ih := ihBase + kh
 						if ih < 0 || ih >= inH {
 							continue
 						}
+						inputRow := inBase + ih*inW
 						for kw := 0; kw < kernelW; kw++ {
-							iw := ow*strideW - padW + kw
+							iw := iwBase + kw
 							if iw < 0 || iw >= inW {
 								continue
 							}
-							idx := ((n*channels+c)*inH+ih)*inW + iw
+							idx := inputRow + iw
 							sum += input.data[idx]
 							count++
 						}
 					}
 					if count == 0 {
-						return nil, errors.New("AvgPool2D kernel has no overlap with input")
+						atomic.StoreInt32(&errFlag, 1)
+						return
 					}
-					out.data[((n*channels+c)*outH+oh)*outW+ow] = sum / float64(count)
+					out.data[outRow+ow] = sum / float64(count)
 				}
 			}
 		}
+	})
+	if atomic.LoadInt32(&errFlag) == 1 {
+		return nil, errValue
 	}
 
 	if !input.requiresGrad {
@@ -147,47 +188,60 @@ func AvgPool2D(input *Tensor, kernelH, kernelW, strideH, strideW, padH, padW int
 	out.node = &node{
 		backward: func(grad *Tensor, grads map[*Tensor]*Tensor) {
 			gInput := Zeros(input.shape...)
-			for n := 0; n < batch; n++ {
-				for c := 0; c < channels; c++ {
-					for oh := 0; oh < outH; oh++ {
-						for ow := 0; ow < outW; ow++ {
-							gVal := grad.data[((n*channels+c)*outH+oh)*outW+ow]
-							count := 0
-							for kh := 0; kh < kernelH; kh++ {
-								ih := oh*strideH - padH + kh
-								if ih < 0 || ih >= inH {
+			parallel.For(batch, func(start, end int) {
+				for n := start; n < end; n++ {
+					inBase := n * channels * inH * inW
+					gradBase := n * channels * outH * outW
+					for c := 0; c < channels; c++ {
+						gradOffset := gradBase + c*outH*outW
+						for oh := 0; oh < outH; oh++ {
+							ihBase := oh*strideH - padH
+							gradRow := gradOffset + oh*outW
+							for ow := 0; ow < outW; ow++ {
+								iwBase := ow*strideW - padW
+								gVal := grad.data[gradRow+ow]
+								if gVal == 0 {
 									continue
 								}
-								for kw := 0; kw < kernelW; kw++ {
-									iw := ow*strideW - padW + kw
-									if iw < 0 || iw >= inW {
+								count := 0
+								for kh := 0; kh < kernelH; kh++ {
+									ih := ihBase + kh
+									if ih < 0 || ih >= inH {
 										continue
 									}
-									count++
+									for kw := 0; kw < kernelW; kw++ {
+										iw := iwBase + kw
+										if iw < 0 || iw >= inW {
+											continue
+										}
+										count++
+									}
 								}
-							}
-							if count == 0 {
-								continue
-							}
-							share := gVal / float64(count)
-							for kh := 0; kh < kernelH; kh++ {
-								ih := oh*strideH - padH + kh
-								if ih < 0 || ih >= inH {
+								if count == 0 {
 									continue
 								}
-								for kw := 0; kw < kernelW; kw++ {
-									iw := ow*strideW - padW + kw
-									if iw < 0 || iw >= inW {
+								share := gVal / float64(count)
+								inputChannelOffset := inBase + c*inH*inW
+								for kh := 0; kh < kernelH; kh++ {
+									ih := ihBase + kh
+									if ih < 0 || ih >= inH {
 										continue
 									}
-									idx := ((n*channels+c)*inH+ih)*inW + iw
-									gInput.data[idx] += share
+									inputRow := inputChannelOffset + ih*inW
+									for kw := 0; kw < kernelW; kw++ {
+										iw := iwBase + kw
+										if iw < 0 || iw >= inW {
+											continue
+										}
+										idx := inputRow + iw
+										gInput.data[idx] += share
+									}
 								}
 							}
 						}
 					}
 				}
-			}
+			})
 			accumulate(grads, input, gInput)
 		},
 	}

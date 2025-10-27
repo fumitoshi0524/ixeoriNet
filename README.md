@@ -31,14 +31,15 @@ optim/          Optimizers and gradient utilities
 tensor/         Tensor data structures and autograd machinery
 ```
 
-## Running the MNIST example
+## Running the MNIST examples
 
 ```bash
 # From the repository root
-go run ./cmd/mnist
+go run ./cmd/mnist      # MLP classifier
+go run ./cmd/mnist_cnn  # CNN classifier
 ```
 
-The program downloads the MNIST dataset (with multiple mirrors) on first run, trains an MLP for 12 epochs, logs per-epoch metrics, and verifies that the final test accuracy surpasses 97%.
+Both programs download the MNIST dataset (with multiple mirrors) on first run. The MLP trains for 12 epochs and verifies that the final test accuracy surpasses 97%. The CNN variant trains a small convolutional model with pooling and expects >98.5% test accuracy.
 
 ## Testing
 
